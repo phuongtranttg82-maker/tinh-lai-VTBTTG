@@ -81,7 +81,15 @@ main .wrap{display:flex;flex-direction:column;gap:14px;padding-block:16px 24px}
 .meta small{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .meta b{font-size:15px;font-variant-numeric:tabular-nums}
 .list{display:flex;flex-direction:column}
-.item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 12px;padding:12px 0;border-top:1px solid var(--line)}
+.item details{grid-column:1/-1}
+.item summary{font-size:13px;font-weight:600;color:var(--vtb-xanh-dam);cursor:pointer;padding-block:4px;width:max-content}
+.sched-wrap{overflow-x:auto;margin-top:6px;max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
+.sched{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.sched th{position:sticky;top:0;background:var(--vtb-nen-sang);font-weight:600;color:var(--muted);font-size:12px}
+.sched th,.sched td{padding:7px 10px;text-align:right;white-space:nowrap;border-top:1px solid var(--line)}
+.sched th:first-child,.sched td:first-child{text-align:center}
+.sched th:nth-child(2),.sched td:nth-child(2){text-align:left}
 .item:first-child{border-top:0}
 .item .name{display:flex;flex-direction:column;gap:2px;min-width:0}
 .item .name span{font-weight:600}
@@ -236,15 +244,39 @@ const CONFIG = {
   tyLeVayToiDa: 100,    // % số tiền trên sổ
   coSoNgay: 365
 };
-/* Các phương thức lĩnh lãi. calc = null nghĩa là đang chờ công thức.
-   Bổ sung công thức: calc: ({P, r, months, days, start, end}) => số tiền lãi */
+/* Quy đổi lãi suất theo file QUY_DOI_TINH_LS_HUY_DONG (CV 4277/CV-NHCT3)
+   r = LS cuối kỳ (%/năm), n = kỳ hạn (tháng), i = r/12 (LS tháng), k = số tháng mỗi kỳ lĩnh lãi
+   - Lĩnh trước : 100*i/(1+n*i)*12
+   - Định kỳ k  : 100*((1+n*i)^(k/n) - 1)/k*12   (k=1: hàng tháng; k=3: hàng quý; k=6: 6 tháng) */
+const RATE = {
+  truoc : (r,n)   => { const i = r/100/12; return 100*i/(1+n*i)*12; },
+  dinhKy: (r,n,k) => { const i = r/100/12; return 100*(Math.pow(1+n*i, k/n) - 1)/k*12; }
+};
+/* Các phương thức lĩnh lãi. period: 0 = lĩnh trước, 'n' = cuối kỳ, số = số tháng mỗi kỳ.
+   Định kỳ chỉ áp dụng khi kỳ hạn >= minTerm và chia hết cho period (theo bảng quy đổi). */
 const METHODS = [
-  {key:'truoc', name:'Lĩnh lãi trước',          minTerm:1,  calc:null},
-  {key:'cuoiky',name:'Lĩnh lãi cuối kỳ',        minTerm:1,  calc:({P,r,days})=>P*r/100*days/CONFIG.coSoNgay},
-  {key:'thang', name:'Lĩnh lãi hàng tháng',     minTerm:2,  calc:null},
-  {key:'q3',    name:'Lĩnh lãi định kỳ 3 tháng',minTerm:6,  calc:null},
-  {key:'q6',    name:'Lĩnh lãi định kỳ 6 tháng',minTerm:12, calc:null}
+  {key:'truoc', name:'Lĩnh lãi trước',           minTerm:1,  period:0,   rate:(r,n)=>RATE.truoc(r,n)},
+  {key:'cuoiky',name:'Lĩnh lãi cuối kỳ',         minTerm:1,  period:'n', rate:(r)=>r},
+  {key:'thang', name:'Lĩnh lãi hàng tháng',      minTerm:2,  period:1,   rate:(r,n)=>RATE.dinhKy(r,n,1)},
+  {key:'q3',    name:'Lĩnh lãi định kỳ 3 tháng', minTerm:6,  period:3,   rate:(r,n)=>RATE.dinhKy(r,n,3)},
+  {key:'q6',    name:'Lĩnh lãi định kỳ 6 tháng', minTerm:12, period:6,   rate:(r,n)=>RATE.dinhKy(r,n,6)}
 ];
+// Lịch lĩnh lãi: mỗi kỳ tính theo số ngày thực tế/365, mốc kỳ = cùng ngày của tháng thứ k, 2k...
+function schedule(m, P, r, n, start, end){
+  const rate = m.rate(r,n), d = CONFIG.coSoNgay;
+  if(m.period === 0){ const days = daysBetween(start,end); return {rate, rows:[{no:1, date:start, days, amt:P*rate/100*days/d}]}; }
+  const k = m.period === 'n' ? n : m.period, rows = [];
+  for(let j=1; j<=n/k; j++){
+    const a = addMonths(start,k*(j-1)), b = addMonths(start,k*j), days = daysBetween(a,b);
+    rows.push({no:j, date:b, days, amt:P*rate/100*days/d});
+  }
+  return {rate, rows};
+}
+function applicable(m, n){
+  if(n < m.minTerm) return `Áp dụng kỳ hạn từ ${m.minTerm} tháng`;
+  if(typeof m.period === 'number' && m.period > 1 && n % m.period) return `Kỳ hạn phải là bội số của ${m.period} tháng`;
+  return '';
+}
 /* Danh sách tab: thêm tab mới = thêm 1 dòng + 1 <section data-tab="..."> */
 const TABS = [
   {id:'tietkiem', label:'Tính lãi tiết kiệm'},
@@ -256,7 +288,8 @@ const $ = id => document.getElementById(id);
 const nf2 = new Intl.NumberFormat('vi-VN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const nf0 = new Intl.NumberFormat('vi-VN',{maximumFractionDigits:0});
 const money = v => nf2.format(v) + ' đ';
-const pct = v => new Intl.NumberFormat('vi-VN',{maximumFractionDigits:3}).format(v) + '%/năm';
+const rate4 = v => new Intl.NumberFormat('vi-VN',{minimumFractionDigits:4,maximumFractionDigits:4}).format(v) + '%/năm';
+const pct = v =>new Intl.NumberFormat('vi-VN',{maximumFractionDigits:3}).format(v) + '%/năm';
 const parseMoney = s => Number(String(s).replace(/\D/g,'')) || 0;
 const parseRate  = s => { const v = parseFloat(String(s).replace(/\s/g,'').replace(',','.')); return isFinite(v) ? v : 0; };
 const pad = n => String(n).padStart(2,'0');
@@ -296,16 +329,19 @@ function calcTab1(){
   const P = parseMoney($('t1-amount').value), r = parseRate($('t1-rate').value), n = termOf('t1term');
   const start = showDate($('t1-start'),'t1-start-txt'), box = $('t1-result');
   if(!P || !r || !start){ box.innerHTML = `<h2>Kết quả</h2><div class="err">Nhập số tiền gửi, lãi suất và ngày gửi để xem tiền lãi.</div>`; return; }
-  const end = addMonths(start,n), days = daysBetween(start,end), ctx = {P,r,months:n,days,start,end};
+  const end = addMonths(start,n), days = daysBetween(start,end);
+  let lck = 0;
   const rows = METHODS.map(m => {
-    let right;
-    if(n < m.minTerm) right = `<span class="pill na">Không áp dụng</span>`;
-    else if(!m.calc)  right = `<span class="pill wait">Chờ công thức</span>`;
-    else right = `<span class="money">${money(m.calc(ctx))}</span>`;
-    const sub = n < m.minTerm ? `Áp dụng kỳ hạn từ ${m.minTerm} tháng` : '';
-    return `<div class="item"><div class="name"><span>${m.name}</span>${sub?`<small>${sub}</small>`:''}</div>${right}</div>`;
+    const why = applicable(m,n);
+    if(why) return `<div class="item"><div class="name"><span>${m.name}</span><small>${why}</small></div><span class="pill na">Không áp dụng</span></div>`;
+    const s = schedule(m,P,r,n,start,end), total = s.rows.reduce((t,x)=>t+x.amt,0);
+    if(m.key==='cuoiky') lck = total;
+    const when = m.period===0 ? `nhận ngày ${fmtDate(start)}` : m.period==='n' ? `nhận ngày ${fmtDate(end)}` : `${s.rows.length} kỳ`;
+    const detail = s.rows.length > 1 ? `<details><summary>Xem lịch lĩnh lãi</summary><div class="sched-wrap"><table class="sched">
+        <thead><tr><th>Kỳ</th><th>Ngày lĩnh</th><th>Số ngày</th><th>Tiền lãi</th></tr></thead>
+        <tbody>${s.rows.map(x=>`<tr><td>${x.no}</td><td>${fmtDate(x.date)}</td><td>${x.days}</td><td>${nf2.format(x.amt)}</td></tr>`).join('')}</tbody></table></div></details>` : '';
+    return `<div class="item"><div class="name"><span>${m.name}</span><small>LS ${rate4(s.rate)} · ${when}</small></div><span class="money">${money(total)}</span>${detail}</div>`;
   }).join('');
-  const lck = METHODS[1].calc(ctx);
   box.innerHTML = `
     <h2>Tiền lãi theo phương thức lĩnh lãi</h2>
     <div class="meta">
@@ -314,7 +350,8 @@ function calcTab1(){
       <div><small>Số ngày</small><b>${days} ngày</b></div>
     </div>
     <div class="list">${rows}</div>
-    <div class="total"><span>Gốc + lãi cuối kỳ</span><b>${money(P+lck)}</b></div>`;
+    <div class="total"><span>Gốc + lãi cuối kỳ</span><b>${money(P+lck)}</b></div>
+    <p class="note">Lãi suất các phương thức được quy đổi từ lãi suất cuối kỳ theo CV 4277/CV-NHCT3. Tiền lãi tính theo số ngày thực tế/365.</p>`;
 }
 
 /* ===== TAB 2 ===== */
